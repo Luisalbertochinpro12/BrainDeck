@@ -1,15 +1,56 @@
 import SwiftUI
 
+// NOTA IMPORTANTE: Se ASUME que el Helper de FileManager está en un archivo llamado
+// PersistenceHelper.swift y que está incluido en el target de esta App.
+
 struct DeckListView: View {
-    // Usamos @State para que esta lista se pueda modificar (añadir/eliminar mazos)
-    @State private var decks: [Deck] = Deck.sampleDecks
-    @State private var showingAddDeckView = false // Controla la hoja modal
+    // Usaremos un array vacío que se llenará con la función loadDecks()
+    @State private var decks: [Deck] = []
+    @State private var showingAddDeckView = false
 
     // Función para eliminar mazos
     func deleteDecks(offsets: IndexSet) {
-        // La lista 'decks' se modifica directamente
         decks.remove(atOffsets: offsets)
+        // El .onChange se encargará de guardar.
     }
+
+    // Función para guardar los mazos
+    func saveDecks() {
+        // Usa la propiedad compartida definida en PersistenceHelper.swift
+        guard let url = FileManager.sharedStoreURL else {
+            print("Error: URL de App Group no disponible para guardar.")
+            return
+        }
+        
+        do {
+            let data = try JSONEncoder().encode(decks)
+            try data.write(to: url, options: .atomic)
+            print("Mazos guardados en App Group: \(decks.count)")
+        } catch {
+            print("Error al guardar los mazos: \(error.localizedDescription)")
+        }
+    }
+    
+    // Función para cargar los mazos
+    func loadDecks() {
+        // Usa la propiedad compartida definida en PersistenceHelper.swift
+        guard let url = FileManager.sharedStoreURL else {
+            // Si no hay URL de App Group, cargamos solo los datos de ejemplo (falla de seguridad)
+            decks = Deck.sampleDecks
+            return
+        }
+        
+        do {
+            let data = try Data(contentsOf: url)
+            decks = try JSONDecoder().decode([Deck].self, from: data)
+            print("Mazos cargados desde App Group: \(decks.count)")
+        } catch {
+            print("No se encontraron datos guardados en App Group. Cargando datos de ejemplo.")
+            decks = Deck.sampleDecks
+            saveDecks() // Guarda los datos de ejemplo en la ubicación del App Group
+        }
+    }
+
 
     var body: some View {
         NavigationView {
@@ -24,22 +65,16 @@ struct DeckListView: View {
                     HStack {
                          Text("Decks").font(.title2).fontWeight(.semibold)
                          Spacer()
-                         // Botón para habilitar la edición (eliminar) en la lista
                          EditButton().foregroundColor(.purple)
                     }
                     .padding(.bottom, 5)
                     
                     // MARK: - Lista de Mazos
+                    // Usamos ForEach para permitir el .onDelete
                     ForEach($decks) { $deck in
                         DeckRowView(deck: $deck)
                     }
-                    // APLICACIÓN DEL MODIFICADOR DE ELIMINACIÓN
-                    // NOTA: Este .onDelete necesita un List en lugar de VStack/ScrollView,
-                    // pero lo aplicaremos sobre el ForEach para que funcione como swipe.
                     .onDelete(perform: deleteDecks)
-                    // Para que .onDelete funcione correctamente en un ScrollView,
-                    // deberías usar List, pero mantendremos el diseño actual de VStack
-                    // haciendo un pequeño truco con el `ForEach` y el `.onDelete`
                 }
                 .padding()
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -49,7 +84,6 @@ struct DeckListView: View {
             
             // MARK: - Botón Flotante para Añadir Mazo
             .overlay(alignment: .bottomTrailing) {
-                // ... (código del botón flotante) ...
                 Button(action: {
                     showingAddDeckView = true
                 }) {
@@ -70,10 +104,15 @@ struct DeckListView: View {
             }
         }
         .preferredColorScheme(.dark)
+        // 2. CARGAR AL INICIO Y GUARDAR CON CADA CAMBIO
+        .onAppear(perform: loadDecks)
+        .onChange(of: decks) { // <-- Sintaxis moderna: no necesita parámetros si solo llama a una función
+            saveDecks()
+        }
     }
 }
 
-// MARK: - Vistas Auxiliares (Fila y Añadir Mazo)
+// MARK: - Vistas Auxiliares
 
 // 1. La vista para cada fila del mazo (DeckRowView)
 struct DeckRowView: View {
@@ -93,9 +132,12 @@ struct DeckRowView: View {
                     .font(.subheadline)
                     .foregroundColor(.blue)
                 
-                Button(action: { print("Editar mazo: \(deck.name)") }) {
-                    Image(systemName: "pencil")
-                        .foregroundColor(.white)
+                // Asumiendo que el botón pencil llevará a CardManagerView
+                // Nota: Asegúrate de que CardManagerView exista o coméntalo si no lo has creado.
+                // Si CardManagerView no existe, el código fallará al compilar.
+                NavigationLink(destination: CardManagerView(deck: $deck)) {
+                     Image(systemName: "pencil")
+                         .foregroundColor(.white)
                 }
                 .buttonStyle(PlainButtonStyle())
             }
@@ -132,6 +174,7 @@ struct AddDeckView: View {
                         let newDeck = Deck(name: newDeckName, cards: [])
                         decks.append(newDeck)
                         showingAddDeckView = false
+                        // El .onChange en DeckListView guardará automáticamente
                     }
                     .disabled(newDeckName.isEmpty)
                 }
@@ -141,7 +184,3 @@ struct AddDeckView: View {
     }
 }
 
-// MARK: - Preview
-#Preview {
-    DeckListView()
-}

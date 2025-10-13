@@ -1,46 +1,113 @@
 import SwiftUI
 
 struct FlashcardView: View {
-    // @Binding es crucial para que los cambios se guarden en el mazo original.
     @Binding var deck: Deck
     
-    // @State para manejar la tarjeta actual y si estamos viendo la respuesta
     @State private var currentCardIndex: Int = 0
     @State private var showAnswer: Bool = false
     
+    // Almacena solo las tarjetas que están listas para ser estudiadas HOY
+    @State private var reviewCards: [Flashcard] = []
+    
+    // Propiedad calculada para obtener la tarjeta actual
+    var currentCard: Flashcard? {
+        reviewCards[safe: currentCardIndex]
+    }
+    
+    // Función central para generar el nuevo intervalo de revisión
+    func calculateNextReviewDate(for mastery: Int) -> Date {
+        let now = Date()
+        var interval: TimeInterval = 0
+        
+        // Elige el intervalo y agrega aleatoriedad para evitar 'avalanchas' de tarjetas
+        switch mastery {
+        case 1: // Difícil: 30 minutos a 1 hora
+            let minutes = Double.random(in: 30...60)
+            interval = minutes * 60
+        case 2: // Lo sé: 12 a 18 horas
+            let hours = Double.random(in: 12...18)
+            interval = hours * 3600
+        case 3: // Fácil (o Mazo Nuevo): 1 a 2 días
+            let days = Double.random(in: 1...2)
+            interval = days * 86400
+        default:
+            interval = 0
+        }
+        
+        return now.addingTimeInterval(interval)
+    }
+    
     // Función para manejar la calificación y pasar a la siguiente tarjeta
     func rateCard(mastery: Int) {
-        // La corrección: accedemos a deck.cards (el valor real) y luego encontramos el índice.
-        // Usamos el ID de la tarjeta actual para asegurar que encontramos la correcta en el array.
-        guard let currentCardId = deck.cards[safe: currentCardIndex]?.id else { return }
+        guard let currentCard = currentCard else { return }
 
-        // 1. Encontramos el índice de la tarjeta actual en el arreglo del mazo.
-        if let cardIndex = deck.cards.firstIndex(where: { $0.id == currentCardId }) {
-            // 2. Actualizamos el masteryLevel de esa tarjeta.
-            // Aquí NO se usa el $, porque deck.cards ya es el valor mutable gracias a @Binding
-            deck.cards[cardIndex].masteryLevel = mastery
+        // 1. Calculamos la nueva fecha de revisión
+        let newReviewDate = calculateNextReviewDate(for: mastery)
+
+        // 2. Encontramos el índice de esa tarjeta en el array ORIGINAL (deck.cards) usando el ID.
+        if let originalIndex = deck.cards.firstIndex(where: { $0.id == currentCard.id }) {
             
-            // 3. Pasamos a la siguiente tarjeta
-            if currentCardIndex < deck.cardCount - 1 {
-                navigateCard(direction: 1)
+            // 3. Actualizamos el masteryLevel y la fecha en el array ORIGINAL (persistencia)
+            deck.cards[originalIndex].masteryLevel = mastery
+            deck.cards[originalIndex].nextReviewDate = newReviewDate
+            
+            // 4. Movemos la tarjeta actual (reviewCards[currentCardIndex])
+            // Ya fue calificada, así que la removemos del lote de estudio de hoy.
+            reviewCards.remove(at: currentCardIndex)
+
+            // 5. Ajustamos el índice si la eliminación causó que el índice actual estuviera fuera de límites
+            if currentCardIndex >= reviewCards.count && reviewCards.count > 0 {
+                currentCardIndex = reviewCards.count - 1
+            }
+            
+            // 6. Si quedan tarjetas, reseteamos el estado de visualización
+            if reviewCards.count > 0 {
+                showAnswer = false
             } else {
-                print("Fin del mazo!")
+                print("Fin del lote de estudio de hoy!")
             }
         }
     }
     
-    // Función para cambiar de tarjeta
+    // Función para navegar manualmente (solo se usa en los botones de flecha)
     func navigateCard(direction: Int) {
-        currentCardIndex += direction
-        showAnswer = false // Siempre oculta la respuesta al cambiar de tarjeta
+        // Aseguramos que no salgamos de los límites del arreglo
+        let newIndex = currentCardIndex + direction
+        if newIndex >= 0 && newIndex < reviewCards.count {
+            currentCardIndex = newIndex
+            showAnswer = false // Oculta la respuesta al cambiar de tarjeta
+        }
     }
+    
+    // Función para construir el array de tarjetas que SÍ toca estudiar hoy
+    func prepareCardsForReview() {
+        let now = Date()
+        
+        // Filtramos solo las tarjetas cuya fecha de revisión es HOY o anterior
+        reviewCards = deck.cards
+            .filter { $0.nextReviewDate <= now }
+            
+        // Ordenamos las tarjetas: ¡Las más difíciles/viejas primero!
+        // Prioridad: 1 (Difícil) > 2 (Lo sé) > 0 (Nuevo/No calificado)
+        reviewCards.sort { card1, card2 in
+            // 1. Priorizamos las que tienen menor nivel de dominio (más difíciles/nuevas)
+            if card1.masteryLevel != card2.masteryLevel {
+                return card1.masteryLevel < card2.masteryLevel
+            }
+            // 2. Si el nivel es el mismo, priorizamos la que lleva más tiempo sin revisar
+            return card1.nextReviewDate < card2.nextReviewDate
+        }
+
+        currentCardIndex = 0
+    }
+
 
     var body: some View {
         ZStack {
             Color.black.edgesIgnoringSafeArea(.all)
             
             VStack {
-                if let card = deck.cards[safe: currentCardIndex] {
+                if let card = currentCard {
                     
                     // MARK: - La Tarjeta con Animación de Volteo
                     FlashcardFlipView(card: card, showAnswer: showAnswer)
@@ -53,15 +120,16 @@ struct FlashcardView: View {
                     // MARK: - Controles de Calificación (Solo visibles con la respuesta)
                     if showAnswer {
                         HStack(spacing: 20) {
-                            Button("Difícil 🤯") {
-                                rateCard(mastery: 1)
-                            }
+                            Button("Difícil 🤯") { rateCard(mastery: 1) }
                             .buttonStyle(RatingButtonStyle(color: .red))
                             
-                            Button("Lo sé 😉") {
-                                rateCard(mastery: 2)
-                            }
+                            // Nivel intermedio (Lo sé)
+                            Button("Lo sé 😉") { rateCard(mastery: 2) }
                             .buttonStyle(RatingButtonStyle(color: .green))
+
+                            // Nivel Fácil (o Nueva)
+                            Button("Fácil 😇") { rateCard(mastery: 3) }
+                            .buttonStyle(RatingButtonStyle(color: .purple))
                         }
                         .padding(.top, 30)
                     }
@@ -75,7 +143,7 @@ struct FlashcardView: View {
                         
                         Spacer()
                         
-                        Text("\(currentCardIndex + 1) / \(deck.cardCount)")
+                        Text("\(currentCardIndex + 1) / \(reviewCards.count)")
                             .font(.headline)
                         
                         Spacer()
@@ -83,39 +151,45 @@ struct FlashcardView: View {
                         Button(action: { navigateCard(direction: 1) }) {
                             Image(systemName: "arrow.right.circle.fill")
                         }
-                        .disabled(currentCardIndex == deck.cardCount - 1)
+                        .disabled(currentCardIndex == reviewCards.count - 1)
                     }
                     .font(.largeTitle)
                     .foregroundColor(.blue)
                     .padding(.top, showAnswer ? 10 : 40)
                     .padding(.horizontal, 60)
                 } else {
-                    Text("¡Este mazo no tiene tarjetas!").foregroundColor(.white).padding()
+                    // Mensaje cuando no hay tarjetas para revisar hoy
+                    Text(deck.cardCount > 0 ? "¡Excelente! No hay tarjetas pendientes para hoy." : "Este mazo está vacío.")
+                        .foregroundColor(.white)
+                        .font(.title2)
+                        .multilineTextAlignment(.center)
+                        .padding(40)
                 }
             }
         }
         .navigationTitle(deck.name)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                // Aquí se pasa $deck (el Binding) a CardManagerView, que lo espera.
                 NavigationLink(destination: CardManagerView(deck: $deck)) {
                     Text("Gestionar")
                         .foregroundColor(.purple)
                 }
             }
         }
+        // LLAMADA CLAVE: Prepara las tarjetas al cargar la vista
+        .onAppear(perform: prepareCardsForReview)
         .preferredColorScheme(.dark)
     }
 }
 
-// MARK: - ESTILO DE BOTÓN PERSONALIZADO
+// MARK: - ESTILO DE BOTÓN PERSONALIZADO (AÑADIDO UN TERCER BOTÓN)
 struct RatingButtonStyle: ButtonStyle {
     var color: Color
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.headline)
             .padding(.vertical, 10)
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 10)
             .background(color)
             .foregroundColor(.white)
             .cornerRadius(10)
@@ -123,8 +197,10 @@ struct RatingButtonStyle: ButtonStyle {
     }
 }
 
-// MARK: - VISTAS DE ANIMACIÓN Y CARA
+// MARK: - VISTAS DE ANIMACIÓN Y CARA (SIN CAMBIOS)
+
 struct FlashcardFlipView: View {
+    // ... (Tu código de FlashcardFlipView y CardFace permanece aquí)
     let card: Flashcard
     let showAnswer: Bool
     var rotationAngle: Double { showAnswer ? 180 : 0 }
@@ -165,21 +241,10 @@ struct CardFace: View {
     }
 }
 
-// MARK: - Extensión de Seguridad para Arreglos
+// MARK: - Extensión de Seguridad para Arreglos (SIN CAMBIOS)
 extension Collection {
     subscript(safe index: Index) -> Element? {
         return indices.contains(index) ? self[index] : nil
     }
 }
 
-// MARK: - Preview
-struct FlashcardView_Previews: PreviewProvider {
-    @State static var sampleDeck = Deck.sampleDeck
-    
-    static var previews: some View {
-        NavigationView {
-            FlashcardView(deck: $sampleDeck)
-        }
-        .preferredColorScheme(.dark)
-    }
-}
