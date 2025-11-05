@@ -45,3 +45,60 @@ struct Deck: Identifiable, Codable, Equatable {
         ]
     }
 }
+
+// MARK: - 3. QuizQuestion (Estructura para el Cuestionario)
+struct QuizQuestion: Identifiable {
+    let id = UUID()
+    let card: Flashcard        // Referencia a la tarjeta original
+    let questionText: String   // El enunciado (ej: "Ensamblador")
+    let correctAnswer: String  // La respuesta correcta (ej: "Lenguaje a nivel computadora")
+    let options: [String]      // Las 4 opciones mezcladas (incluida la correcta)
+}
+
+// MARK: - 4. Extensión para generar el Cuestionario (Lógica de Distractores Corregida)
+extension Deck {
+    
+    func generateQuizQuestions() -> [QuizQuestion] {
+        // Mínimo 4 tarjetas para poder tener 1 correcta y 3 distractores.
+        guard self.cards.count >= 4 else { return [] }
+
+        var quizQuestions: [QuizQuestion] = []
+        
+        // 1. Obtenemos TODAS las respuestas (answers) del MAZO ACTUAL.
+        let allAnswers = self.cards.map { $0.answer }
+
+        // 2. Iterar sobre las tarjetas para crear una pregunta por cada una.
+        for card in self.cards {
+            
+            // La respuesta correcta es el campo 'answer'.
+            let correctAnswer = card.answer
+            
+            // El texto de la pregunta es el campo 'question'.
+            let questionText = card.question
+            
+            // 3. Generar 3 respuestas incorrectas (distractores)
+            var incorrectAnswers = allAnswers
+                // Filtramos: Excluimos la respuesta correcta.
+                .filter { $0 != correctAnswer }
+                .shuffled() // Barajamos
+                .prefix(3)  // Tomamos un máximo de 3
+            
+            // 4. Construir las opciones mezcladas.
+            var options = [correctAnswer]
+            options.append(contentsOf: incorrectAnswers) // Añadimos los distractores
+            
+            // 5. Crear la pregunta (Respetando el orden de inicialización: questionText, correctAnswer, options)
+            let question = QuizQuestion(
+                card: card,
+                questionText: "Responde: \(questionText)",
+                correctAnswer: correctAnswer,
+                options: options.shuffled()
+            )
+            
+            quizQuestions.append(question)
+        }
+        
+        // Barajar el orden de las preguntas del quiz
+        return quizQuestions.shuffled()
+    }
+}

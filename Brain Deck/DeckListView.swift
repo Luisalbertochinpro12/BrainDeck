@@ -51,28 +51,41 @@ struct DeckListView: View {
         }
     }
 
+    // Propiedad calculada para ordenar los mazos (los pendientes primero)
+    var sortedDecks: [Deck] {
+        return decks.sorted { deckA, deckB in
+            let today = Date()
+            
+            let countA = deckA.cards.filter { $0.nextReviewDate <= today }.count
+            let countB = deckB.cards.filter { $0.nextReviewDate <= today }.count
+            
+            // Ordenar de mayor a menor número de tarjetas pendientes
+            return countA > countB
+        }
+    }
+
 
     var body: some View {
         NavigationView {
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
                     
-                    // MARK: - Encabezado (Bienvenida)
-                    Text("Welcome").font(.headline).foregroundColor(.gray)
-                    Text("Sebastián").font(.largeTitle).fontWeight(.bold).padding(.bottom, 20)
+
                     
                     // MARK: - Título de Decks
                     HStack {
-                         Text("Decks").font(.title2).fontWeight(.semibold)
-                         Spacer()
-                         EditButton().foregroundColor(.purple)
+                        Text("Decks").font(.title2).fontWeight(.semibold)
+                        Spacer()
+                        EditButton().foregroundColor(.purple)
                     }
                     .padding(.bottom, 5)
                     
                     // MARK: - Lista de Mazos
-                    // Usamos ForEach para permitir el .onDelete
-                    ForEach($decks) { $deck in
-                        DeckRowView(deck: $deck)
+                    // Usamos el array original ($decks) y buscamos el binding por ID
+                    ForEach(sortedDecks, id: \.id) { deck in
+                        if let index = decks.firstIndex(where: { $0.id == deck.id }) {
+                            DeckRowView(deck: $decks[index])
+                        }
                     }
                     .onDelete(perform: deleteDecks)
                 }
@@ -106,7 +119,7 @@ struct DeckListView: View {
         .preferredColorScheme(.dark)
         // 2. CARGAR AL INICIO Y GUARDAR CON CADA CAMBIO
         .onAppear(perform: loadDecks)
-        .onChange(of: decks) { // <-- Sintaxis moderna: no necesita parámetros si solo llama a una función
+        .onChange(of: decks) {
             saveDecks()
         }
     }
@@ -114,12 +127,29 @@ struct DeckListView: View {
 
 // MARK: - Vistas Auxiliares
 
-// 1. La vista para cada fila del mazo (DeckRowView)
+// 1. La vista para cada fila del mazo (DeckRowView) - ¡CORREGIDA Y COMPLETA!
 struct DeckRowView: View {
     @Binding var deck: Deck
+    // ¡CRÍTICO!: Esta variable de estado faltaba
+    @State private var showingQuizView = false
+    
+    // Función auxiliar: Devuelve el número de tarjetas pendientes de repaso
+    var cardsDueCount: Int {
+        let today = Date()
+        return deck.cards.filter { card in
+            // Compara la fecha de revisión con hoy. Si la fecha de revisión es menor o igual, está vencida.
+            card.nextReviewDate <= today
+        }.count
+    }
+    
+    // Color para destacar las tarjetas pendientes
+    var badgeColor: Color {
+        return cardsDueCount > 0 ? .red : .green
+    }
     
     var body: some View {
         // NavigationLink que pasa el Binding del mazo ($deck)
+        // Este es el link para ir al modo de repaso de tarjetas
         NavigationLink(destination: FlashcardView(deck: $deck)) {
             HStack {
                 Text(deck.name)
@@ -128,16 +158,43 @@ struct DeckRowView: View {
                 
                 Spacer()
                 
-                Text("\(deck.cardCount) cards")
-                    .font(.subheadline)
-                    .foregroundColor(.blue)
+                // MARK: - Tarjetas Pendientes (Muestra cuántas hay que repasar)
+                HStack(spacing: 4) {
+                    Image(systemName: cardsDueCount > 0 ? "clock.fill" : "checkmark.circle.fill")
+                        .foregroundColor(badgeColor)
+                    
+                    Text("\(cardsDueCount) Due") // Muestra el número de tarjetas pendientes
+                        .font(.subheadline)
+                        .fontWeight(.bold)
+                        .foregroundColor(badgeColor)
+                    
+                    Text("/ \(deck.cardCount) total") // Muestra el total
+                        .font(.subheadline)
+                        .foregroundColor(.gray)
+                }
+                .padding(.trailing, 10)
                 
-                // Asumiendo que el botón pencil llevará a CardManagerView
-                // Nota: Asegúrate de que CardManagerView exista o coméntalo si no lo has creado.
-                // Si CardManagerView no existe, el código fallará al compilar.
+                // MARK: - Botón para INICIAR QUIZ (¡AQUÍ ESTÁ!)
+                Button(action: {
+                    if deck.cards.count >= 4 {
+                        showingQuizView = true // Abre la hoja modal
+                    } else {
+                        // Podrías poner una alerta aquí si quieres
+                        print("Faltan cartas para el quiz")
+                    }
+                }) {
+                    Image(systemName: "questionmark.circle.fill")
+                        // Desactivar y oscurecer si no hay suficientes tarjetas
+                        .foregroundColor(deck.cards.count >= 4 ? .yellow : .gray)
+                }
+                // CRÍTICO: Usar PlainButtonStyle es importante dentro de un NavigationLink
+                .buttonStyle(PlainButtonStyle())
+                .disabled(deck.cards.count < 4)
+                
+                // Botón pencil lleva a CardManagerView
                 NavigationLink(destination: CardManagerView(deck: $deck)) {
-                     Image(systemName: "pencil")
-                         .foregroundColor(.white)
+                    Image(systemName: "pencil")
+                        .foregroundColor(.white)
                 }
                 .buttonStyle(PlainButtonStyle())
             }
@@ -147,10 +204,17 @@ struct DeckRowView: View {
             .padding(.horizontal, 5)
         }
         .buttonStyle(PlainButtonStyle())
+
+        // HOJA MODAL para el Quiz (¡ESTO TAMBIÉN FALTABA!)
+        .sheet(isPresented: $showingQuizView) {
+            NavigationView {
+                QuizView(deck: $deck)
+            }
+        }
     }
 }
 
-// 2. La vista para añadir un mazo
+// 2. La vista para añadir un mazo (AddDeckView)
 struct AddDeckView: View {
     @Binding var decks: [Deck]
     @Binding var showingAddDeckView: Bool
@@ -183,4 +247,3 @@ struct AddDeckView: View {
         .preferredColorScheme(.dark)
     }
 }
-
